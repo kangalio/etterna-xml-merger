@@ -141,6 +141,10 @@ class Merger:
 		# All other section are merged more or less with a generic
 		# method
 		for i in range(1, len(sections)):
+			if len(sections[i]) == 0:
+				print(f"none of the xmls have {section_names[i]}, skipping")
+				continue
+			
 			similar_fn = head_equals # function to check if duplicate
 			if section_names[i] == "PlayerScores":
 				similar_fn = Merger._custom_similarity_compare_1
