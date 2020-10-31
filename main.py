@@ -76,9 +76,15 @@ class App:
 		self.ui.exec_()
 	
 	def add_xml(self, path):
-		parser = etree.XMLParser(remove_blank_text=True)
-		xml_tree = etree.parse(path, parser)
+		try: # First try UTF-8
+			parser = etree.XMLParser(remove_blank_text=True, encoding='UTF-8')
+			xml_tree = etree.parse(path, parser)
+		except: # If that doesn't work, fall back to ISO-8859-1
+			print("XML parsing with UTF-8 failed")
+			parser = etree.XMLParser(remove_blank_text=True, encoding='ISO-8859-1')
+			xml_tree = etree.parse(path, parser)
 		xml = xml_tree.getroot()
+		
 		self.xml_trees.append(xml_tree)
 		self.xmls.append(xml)
 		
@@ -145,33 +151,34 @@ class Merger:
 				print(f"none of the xmls have {section_names[i]}, skipping")
 				continue
 			
-			similar_fn = head_equals # function to check if duplicate
+			# choose appropriate duplicate check function
 			if section_names[i] == "PlayerScores":
-				similar_fn = Merger._custom_similarity_compare_1
+				similar_fn = Merger._player_scores_similarity_compare
 			elif section_names[i] == "ScoreGoals":
-				similar_fn = Merger._custom_similarity_compare_2
+				similar_fn = Merger._score_goals_similarity_compare
+			else:
+				similar_fn = head_equals
 			
-			generic_merge(sections[i], similar_fn)
-			merged_section = sections[i][0]
+			target = sections[i][0]
+			sources = sections[i][1:]
+			generic_merge(target, sources, similar_fn)
 			
-			if not merged_section is None: root.append(merged_section)
+			root.append(target)
 		
 		return root
 	
-	# It's only for PlayerScores merging
-	def _custom_similarity_compare_1(e1, e2):
+	def _player_scores_similarity_compare(e1, e2):
 		if e1.tag == e2.tag:
-			if e1.tag == "ScoresAt":
-				return e1.get("Rate") == e2.get("Rate")
-			elif e1.tag == "Chart":
+			if e1.tag == "Chart":
 				return e1.get("Key") == e2.get("Key")
+			elif e1.tag == "ScoresAt":
+				return float(e1.get("Rate")) == float(e2.get("Rate"))
 			elif e1.tag == "Score":
 				return e1.get("Key") == e2.get("Key")
 		
 		return head_equals(e1, e2)
 	
-	# This one's only for ScoreGoals merging
-	def _custom_similarity_compare_2(e1, e2):
+	def _score_goals_similarity_compare(e1, e2):
 		if e1.tag == e2.tag and e1.tag == "ScoreGoal": return xml_equals(e1, e2)
 		else: return head_equals(e1, e2)
 	
@@ -184,8 +191,6 @@ class Merger:
 			"TotalTapsAndHolds", "TotalJumps", "TotalHolds",
 			"TotalRolls", "TotalMines", "TotalHands", "TotalLifts",
 			"NumTotalSongsPlayed"]
-		
-		# TODO: reimplement the following with a dict (much cleaner)
 		
 		# Sum up the totals from each GeneralData
 		totals = {total_name: 0 for total_name in totals_names}
@@ -215,37 +220,31 @@ class Merger:
 # list. Appends all direct children of all elements and removes
 # duplicates (if an element is a duplicate is defined by the given
 # similar_fn function).
-def generic_merge(elements, similar_fn):
-	if len(elements) == 0: return
+def generic_merge(target, sources: list, similar_fn) -> None:
+	# Let's assume as an example that `target` and `sources` are of type "PlayerScores"
 	
-	root = elements[0] # Use first element as main root to merge into
-	
-	for element in elements[1:]:
-		for child in element:
-			# Check if some element with same 'head' already exists
-			brothers = [x for x in root if (similar_fn)(child, x)]
-			if len(brothers) >= 1: # If yes:
-				if len(brothers) > 1:
-					# this should not happen regularly
-					print(f"WARNING {len(brothers)} merge candidates available (there should only be one)")
-				
-				# Merge child's children into the element which is
-				# already in the list
-				to_be_merged_into = brothers[0]
-				generic_merge([to_be_merged_into, child], similar_fn)
-			else: # If no, just append directly
-				root.append(child)
+	# Iterate all the PlayerScores variants
+	for source in sources:
+		# Iterate all source Score's
+		for element in source:
+			# Find a target Score to merge into
+			merge_target = None
+			for possible_merge_target in target:
+				if (similar_fn)(element, possible_merge_target):
+					merge_target = possible_merge_target
+					break
+			
+			if merge_target is None:
+				# there's no existing merge target - this score is brand new. just put it into the
+				# target then
+				target.append(element)
+			else: # if there's an existing Score to merge into, do that
+				generic_merge(merge_target, [element], similar_fn)
 
-# Compares two XML elements for 'head equality' (i.e. ignoring
-# children equality)
-def head_equals(e1, e2):
-    if e1.tag != e2.tag: return False
-    #if e1.text != e2.text: return False # we consider it to be duplicates even if text doesn't match
-    if e1.tail != e2.tail: return False
-    if e1.attrib != e2.attrib: return False
-    #if len(e1) != len(e2): return False
-    #return all(xml_equal(c1, c2) for c1, c2 in zip(e1, e2))
-    return True
+# Compares two XML elements for 'head equality' (i.e. ignoring children equality)
+def head_equals(a, b):
+	return a.tag == b.tag \
+			and a.attrib == b.attrib
 
 # Compares two XML elements for equality. Checks recursively
 def xml_equals(e1, e2):
@@ -266,4 +265,7 @@ def gen_xml_description(path, xml):
 	return f"{size_mb} MB, {len(scores)} scores from {start_date} to {end_date}"
 
 app = App()
+#app.add_xml("tachyon-existing.xml")
+#app.add_xml("tachyon-generated.xml")
+#app.merge_and_save("result-new.xml")
 app.run()
